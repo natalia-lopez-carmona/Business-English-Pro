@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Business English Pro · B1 → B2</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-logo">BE</div>
+      <div>
+        <div class="brand-title">Business English Pro</div>
+        <div class="brand-sub">B1 medio → B2 · Empleabilidad</div>
+      </div>
+    </div>
+
+    <div class="level-badge" id="levelBadge">
+      <span id="levelLabel">Nivel estimado</span>
+      <strong id="levelValue">B1.1</strong>
+    </div>
+
+    <nav class="nav" id="nav"><!-- injected --></nav>
+
+    <div class="sidebar-footer">
+      <button class="btn-ghost" id="resetBtn" title="Reiniciar todo el progreso">↺ Reiniciar progreso</button>
+      <button class="btn-ghost" id="exportBtn" title="Exportar tu progreso a un archivo">⇩ Exportar</button>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <header class="topbar">
+      <button class="hamburger" id="hamburger" aria-label="Menú">☰</button>
+      <div class="progress-wrap">
+        <div class="progress-label">
+          <span>Progreso global del curso</span>
+          <span id="globalPct">0%</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill" id="globalFill"></div></div>
+      </div>
+      <div class="streak" id="streak" title="Días seguidos de estudio">🔥 <span id="streakCount">0</span></div>
+    </header>
+
+    <section class="view" id="view"><!-- injected --></section>
+
+    <footer class="app-footer">
+      Hecho para practicar inglés laboral real · Tu progreso se guarda solo en este navegador (localStorage).
+    </footer>
+  </main>
+
+  <div class="overlay" id="overlay"></div>
+
+  <script src="js/content.js"></script>
+  <script src="js/content-extra.js"></script>
+  <script src="js/content-travel.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
