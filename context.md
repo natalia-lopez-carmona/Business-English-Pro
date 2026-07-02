@@ -68,6 +68,7 @@ business-english-course/
 | Business English | `lessons` (`BUSINESS`) | Meetings, negociación, presentaciones, Agile |
 | Entrevistas | `interview` | Preguntas con ejemplos B1/B2/natural |
 | Simulador entrevista | `simulator` | Dificultad adaptativa + feedback + voz |
+| Speaking con IA | `aispeaking` | Conversación libre con **Google Gemini** (BYOK, ver sección 6) + voz |
 | Corrección inteligente | `corrector` | Heurísticas (false friends, incontables…) + nivel CEFR + voz |
 | Frases útiles | `phrases` | Biblioteca con buscador |
 | Inglés para viajes | `travel` | 14 escenarios, mini-simulador, vocab, supervivencia |
@@ -86,6 +87,7 @@ business-english-course/
 - **Corrector:** `analyzeText` + `CORR_RULES` (reglas regex deterministas).
 - **Voz:** `attachMic(btn, textarea, confEl, srcLabel)` (Web Speech API, `en-US`), indicador de confianza `showConfidence`, historial en `state.speechReadings`, resumen en Estadísticas (`renderSpeechSection`/`speechStats`).
 - **Repaso de vocabulario:** `RENDER.vocabsession`, `buildVocabQuestions`/`makeVocabQ`/`vocabPool`; modo escritura con corrección tolerante (`normAns`/`acceptableForms`/`levenshtein`); racha (`vocabRegister`/`vsStreakPill`).
+- **Speaking con IA (Gemini):** `RENDER.aispeaking` + `callGemini(apiKey, model, systemPrompt, history)` — llama directo (fetch, sin backend) a `generativelanguage.googleapis.com` con la clave del usuario (BYOK, `state.geminiKey`, guardada solo en `localStorage`, nunca en un servidor propio porque no existe). Escenarios en `AI_SCENARIOS`; prompt de sistema en `aiSystemPrompt()`; flujo de turnos en `aiRequestReply`/`aiEnd` (feedback final en español + nivel CEFR). Reutiliza `attachMic`/`speak` para voz. Modelo por defecto `gemini-2.0-flash`, override opcional en `state.geminiModel`.
 
 ## 7. Cómo extender
 
@@ -93,6 +95,8 @@ business-english-course/
 - **Nuevo mazo de vocabulario:** añade a `VOCAB.decks` (o `TRAVEL_VOCAB.decks`). Entra automáticamente en flashcards y en el repaso de vocabulario.
 - **Nuevo módulo:** añade una entrada a `COURSE.modules` con un `type` nuevo y define `RENDER.<type>`.
 - **Nuevo logro:** añade a `ACHIEVEMENTS` (`content.js`) y su comprobación en `checkAchievements()` (`app.js`).
+- **Nuevo escenario de Speaking con IA:** añade `{id, label, prompt}` a `AI_SCENARIOS` (`app.js`). `prompt` es la instrucción en inglés que define el rol de la IA; se inyecta en `aiSystemPrompt()`.
+- **BYOK (Bring Your Own Key):** la app no tiene backend, así que no puede ocultar ninguna clave de API. El patrón usado (clave del usuario en `state.geminiKey`, solo en `localStorage`, llamada `fetch()` directa desde el navegador) es el único viable aquí. Si se añade otro proveedor de IA, seguir el mismo patrón y avisar claramente en la UI de que la clave es visible en las herramientas de desarrollador del propio usuario.
 
 ## 8. Metodología aplicada
 

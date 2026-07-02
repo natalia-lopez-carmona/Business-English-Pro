@@ -19,7 +19,10 @@ const defaultState = () => ({
   vocabBestStreak: 0,// mejor racha de aciertos seguidos en una sesión
   achievements: {},
   visited: {},       // {moduleId:true}
-  speechReadings: [] // [{d:"2026-07-01", pct:82, src:"Entrevista"}] confianza de voz
+  speechReadings: [],// [{d:"2026-07-01", pct:82, src:"Entrevista"}] confianza de voz
+  geminiKey: "",      // clave de API de Gemini del usuario (BYOK, solo local)
+  geminiModel: "",    // override opcional del modelo (vacío = usa el valor por defecto)
+  aiSpeakingSessions: 0
 });
 let state = load();
 
@@ -192,6 +195,7 @@ function checkAchievements() {
   if ((state.vocabBest || 0) >= 90) set("vocab_champ");
   if (Object.values(state.quizScores).some(v => v >= 80)) set("quiz_ace");
   if (state.simSessions >= 1) set("interview_ready");
+  if ((state.aiSpeakingSessions || 0) >= 1) set("ai_talker");
   const _sp = state.speechReadings || [];
   if (_sp.length >= 5 && (_sp.reduce((a, x) => a + x.pct, 0) / _sp.length) >= 80) set("clear_voice");
   if (state.writings >= 3) set("writer");
@@ -286,6 +290,7 @@ RENDER.dashboard = (view) => {
       ${stat("Lecciones hechas", doneCount())}
       ${stat("Flashcards repasadas", state.flashReviewed)}
       ${stat("Simulacros entrevista", state.simSessions)}
+      ${stat("Charlas con IA 🤖", state.aiSpeakingSessions || 0)}
     </div>
     <h2>Explora los módulos</h2>
     <div class="grid grid-3" id="modGrid">
@@ -633,6 +638,258 @@ function simEnd() {
   toast("Sesión guardada ✔ (" + pct + "%)");
 }
 
+/* ---------- SPEAKING CON IA (Google Gemini, clave propia del usuario) ----------
+   Sin backend: cada usuario pega su propia clave gratuita de Gemini y se guarda
+   solo en localStorage. La app llama directamente a la API de Gemini desde el
+   navegador (fetch), que sí admite peticiones CORS desde el cliente. */
+const AI_SCENARIOS = [
+  { id: "free", label: "🗨️ Conversación libre", prompt: "Have a natural, friendly conversation about everyday topics: hobbies, weekend plans, food, travel, movies, current events." },
+  { id: "smalltalk", label: "☕ Small talk de oficina", prompt: "You are a coworker making small talk with the student before a meeting starts — weather, weekend, coffee, commute, weekend plans." },
+  { id: "standup", label: "📋 Daily stand-up", prompt: "You are the Scrum Master running a daily stand-up meeting. Ask the student what they did yesterday, what they'll do today, and whether they have any blockers." },
+  { id: "client", label: "😠 Cliente molesto", prompt: "You are an unhappy client complaining about a delayed delivery. Be firm but professional, not aggressive, and let the student practice apologizing, de-escalating and offering a solution." },
+  { id: "meeting", label: "💡 Defender una idea en una reunión", prompt: "You are a skeptical colleague in a meeting. The student will pitch an idea to you; push back politely, ask for data or reasons, and let them try to convince you." },
+  { id: "interview", label: "🤝 Entrevista de trabajo", prompt: "You are a recruiter interviewing the student for a mid-level professional role. Ask one interview question at a time and follow up naturally based on their answers." },
+  { id: "travel", label: "✈️ Aeropuerto / hotel", prompt: "You are hotel reception or airport staff. Help the student check in, resolve a problem with their booking, and answer their questions naturally." },
+  { id: "negotiation", label: "🤝 Negociar un contrato", prompt: "You are a vendor negotiating a contract with the student, who represents their company. Discuss price, timeline and terms; be reasonable but do not give in immediately." }
+];
+let aiChat = null;        // { scenarioId, customTopic, label, systemPrompt, messages:[{role,text,hidden}], turns, busy }
+let aiAutoSpeak = true;
+let aiPendingEl = null;
+
+function aiModel() { return (state.geminiModel && state.geminiModel.trim()) || "gemini-2.0-flash"; }
+
+function aiSystemPrompt(scenarioId, customTopic) {
+  const sc = AI_SCENARIOS.find(s => s.id === scenarioId) || AI_SCENARIOS[0];
+  let p = `You are an English conversation partner helping a Spanish-speaking student practice spoken Business English. Student level: B1 aiming for B2. Role-play scenario: ${sc.prompt}`;
+  if (customTopic) p += ` Try to steer the conversation towards this topic when it fits naturally: "${customTopic}".`;
+  p += ` Rules: 1) Reply ONLY in English, in 2-4 short sentences suited for spoken conversation (this will be read aloud). 2) Stay in character for the roleplay the whole time. 3) End almost every turn with exactly one natural follow-up question, to keep the student talking. 4) If the student's last message has a clear grammar or vocabulary mistake, add one short gentle correction in parentheses right before your reply, like "(Tip: say 'I have 5 years of experience', not 'experiences') " — only when there is a real mistake, never more than one tip per turn, and skip it entirely if the message was correct. 5) Keep a warm, encouraging, natural tone, like a friendly native speaker — not a teacher lecturing.`;
+  return p;
+}
+
+async function callGemini(apiKey, model, systemPrompt, history) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const body = {
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    contents: history.map(m => ({ role: m.role, parts: [{ text: m.text }] })),
+    generationConfig: { temperature: 0.85, maxOutputTokens: 250 }
+  };
+  let res;
+  try {
+    res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  } catch (e) {
+    throw new Error("Failed to fetch");
+  }
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    const msg = (data && data.error && data.error.message) || `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
+  const cand = data && data.candidates && data.candidates[0];
+  const parts = cand && cand.content && cand.content.parts;
+  const text = parts ? parts.map(p => p.text || "").join("").trim() : "";
+  if (!text) throw new Error("Respuesta vacía (puede que Gemini haya bloqueado el contenido).");
+  return text;
+}
+
+function aiErrorMessage(e) {
+  const m = (e && e.message) || "";
+  if (/API_KEY_INVALID|API key not valid/i.test(m)) return "Tu clave de API no es válida. Revisa que la copiaste completa desde aistudio.google.com.";
+  if (/429|quota|RESOURCE_EXHAUSTED/i.test(m)) return "Has superado el límite gratuito por ahora. Espera un minuto y vuelve a intentarlo.";
+  if (/403|PERMISSION_DENIED/i.test(m)) return "Google ha rechazado la petición (permiso denegado). Verifica tu clave en aistudio.google.com.";
+  if (/404|NOT_FOUND|not found for API version/i.test(m)) return "El modelo indicado no existe o no está disponible. Prueba a borrar el campo de modelo (opciones avanzadas) para usar el valor por defecto.";
+  if (/Failed to fetch|NetworkError/i.test(m)) return "No se pudo conectar con Gemini. Revisa tu conexión a internet.";
+  return "Error al hablar con la IA: " + m;
+}
+
+RENDER.aispeaking = (view) => {
+  const hasKey = !!(state.geminiKey && state.geminiKey.trim());
+  view.innerHTML = `<h1>🤖 Speaking con IA</h1>
+    <p class="subtitle">Mantén una conversación real en inglés con una IA (Google Gemini). Habla o escribe, la IA responde en personaje y corrige tus errores con naturalidad. Necesitas tu propia clave gratuita de Gemini — se guarda solo en este navegador.</p>
+    <div class="card" id="aiKeyCard">
+      <div class="spread">
+        <b>🔑 Clave de API de Gemini</b>
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Consigue una clave gratis ↗</a>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <input id="aiKeyIn" type="password" placeholder="Pega aquí tu clave de Gemini (empieza por AIza...)" value="${hasKey ? esc(state.geminiKey) : ""}" style="flex:1;min-width:220px">
+        <button class="btn secondary" id="aiKeySave">Guardar clave</button>
+        ${hasKey ? `<button class="btn small secondary" id="aiKeyClear">Borrar</button>` : ""}
+      </div>
+      <details style="margin-top:10px">
+        <summary class="small muted" style="cursor:pointer">Opciones avanzadas (modelo)</summary>
+        <div class="row" style="margin-top:8px">
+          <input id="aiModelIn" placeholder="Modelo de Gemini (por defecto: gemini-2.0-flash)" value="${esc(state.geminiModel || "")}" style="flex:1;min-width:220px">
+          <button class="btn small secondary" id="aiModelSave">Guardar modelo</button>
+        </div>
+        <div class="small muted" style="margin-top:6px">Cámbialo solo si Google renombra o retira el modelo por defecto. Ejemplos: <code>gemini-2.0-flash</code>, <code>gemini-2.5-flash</code>, <code>gemini-2.0-flash-lite</code>.</div>
+      </details>
+      <div class="small muted" style="margin-top:8px">Tu clave se guarda únicamente en el almacenamiento local de tu navegador (igual que tu progreso) y solo se envía a la API de Google al conversar — nunca a un servidor nuestro, porque esta app no tiene backend. No la compartas ni la uses en un ordenador público.</div>
+    </div>
+    <div id="aiBody" style="margin-top:14px"></div>`;
+
+  $("#aiKeySave").onclick = () => {
+    const v = $("#aiKeyIn").value.trim();
+    if (!v) { toast("Pega tu clave primero 🙂"); return; }
+    state.geminiKey = v; save();
+    toast("Clave guardada ✔");
+    renderAiBody();
+  };
+  const clearBtn = $("#aiKeyClear");
+  if (clearBtn) clearBtn.onclick = () => {
+    if (!confirm("¿Borrar tu clave guardada?")) return;
+    state.geminiKey = ""; save(); aiChat = null;
+    go("aispeaking");
+  };
+  $("#aiModelSave").onclick = () => {
+    state.geminiModel = $("#aiModelIn").value.trim(); save();
+    toast("Modelo guardado ✔");
+  };
+  renderAiBody();
+};
+
+function renderAiBody() {
+  const host = $("#aiBody"); if (!host) return;
+  const hasKey = !!(state.geminiKey && state.geminiKey.trim());
+  if (!hasKey) {
+    host.innerHTML = `<div class="callout small">Pega tu clave arriba para empezar a practicar. Es gratis y tarda menos de un minuto en aistudio.google.com.</div>`;
+    return;
+  }
+  if (!aiChat) { renderScenarioPicker(host); return; }
+  renderAiChat(host);
+}
+
+function renderScenarioPicker(host) {
+  host.innerHTML = `<div class="card">
+      <h3 style="margin-top:0">Elige un escenario</h3>
+      <div class="lesson-nav" id="aiScenarios">
+        ${AI_SCENARIOS.map((s, i) => `<button class="chip${i === 0 ? " active" : ""}" data-id="${s.id}">${esc(s.label)}</button>`).join("")}
+      </div>
+      <div class="row" style="margin-top:12px">
+        <input id="aiTopicIn" placeholder="O escribe tu propio tema (opcional)...">
+        <button class="btn" id="aiStart">Empezar a hablar ▶</button>
+      </div>
+    </div>`;
+  let selected = AI_SCENARIOS[0].id;
+  $$(".chip", $("#aiScenarios")).forEach(c => {
+    c.onclick = () => { $$(".chip", $("#aiScenarios")).forEach(x => x.classList.remove("active")); c.classList.add("active"); selected = c.dataset.id; };
+  });
+  $("#aiStart").onclick = () => {
+    const topic = $("#aiTopicIn").value.trim();
+    startAiChat(selected, topic);
+  };
+}
+
+function startAiChat(scenarioId, customTopic) {
+  const sc = AI_SCENARIOS.find(s => s.id === scenarioId) || AI_SCENARIOS[0];
+  aiChat = {
+    scenarioId, customTopic, label: sc.label,
+    systemPrompt: aiSystemPrompt(scenarioId, customTopic),
+    messages: [], turns: 0, busy: false
+  };
+  renderAiBody();
+  aiRequestReply("(Start the conversation now — greet me briefly and begin the roleplay, following your instructions.)", true);
+}
+
+function renderAiChat(host) {
+  host.innerHTML = `<div class="card">
+    <div class="spread" style="margin-bottom:8px">
+      <b>${esc(aiChat.label)}</b>
+      <label class="small muted" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="aiAutoSpeak" ${aiAutoSpeak ? "checked" : ""}> Leer respuestas en voz alta
+      </label>
+    </div>
+    <div class="chat" id="aiChatBox"></div>
+    <div class="row" style="margin-top:12px">
+      <textarea id="aiIn" rows="3" placeholder="Escribe tu respuesta en inglés... o pulsa 🎤 Hablar"></textarea>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn" id="aiSend">Enviar ▶</button>
+      <button class="btn secondary" id="aiMic">🎤 Hablar</button>
+      <button class="btn secondary" id="aiNewScenario">🔁 Cambiar escenario</button>
+      <button class="btn secondary" id="aiEnd">Terminar y evaluar</button>
+    </div>
+    <div class="conf-badge" id="aiConf" style="display:none;margin-top:8px"></div>
+    <div class="small muted" style="margin-top:6px">🎤 requiere Chrome/Edge y abrir la app en <code>http://localhost</code> (no con doble clic al archivo).</div>
+  </div>`;
+  aiChat.messages.filter(m => !m.hidden).forEach(m => addAiBubble(m.role === "user" ? "me" : "bot", m.role === "user" ? "Tú" : "IA", m.text));
+  $("#aiSend").onclick = aiSendClick;
+  $("#aiIn").addEventListener("keydown", e => { if (e.key === "Enter" && e.ctrlKey) aiSendClick(); });
+  $("#aiNewScenario").onclick = () => { stopMic(); aiChat = null; renderAiBody(); };
+  $("#aiEnd").onclick = () => { stopMic(); aiEnd(); };
+  $("#aiAutoSpeak").onchange = (e) => { aiAutoSpeak = e.target.checked; };
+  attachMic($("#aiMic"), $("#aiIn"), $("#aiConf"), "Speaking IA");
+  renderAiControls();
+}
+
+function renderAiControls() {
+  const busy = !!(aiChat && aiChat.busy);
+  ["aiSend", "aiMic", "aiNewScenario", "aiEnd"].forEach(id => { const el = $("#" + id); if (el) el.disabled = busy; });
+}
+
+function addAiBubble(cls, who, t, pending, isError) {
+  const c = $("#aiChatBox"); if (!c) return null;
+  const b = document.createElement("div");
+  b.className = "bubble " + cls + (pending ? " ai-pending" : "") + (isError ? " ai-error" : "");
+  b.innerHTML = `<div class="meta">${esc(who)}</div>${esc(t)}`;
+  if (cls === "bot" && !pending && !isError) {
+    b.innerHTML += ` <button class="btn small secondary speak" data-t="${esc(t)}" style="margin-top:6px">🔊</button>`;
+  }
+  c.appendChild(b); c.scrollTop = c.scrollHeight;
+  const btn = b.querySelector(".speak"); if (btn) btn.onclick = () => speak(btn.dataset.t);
+  return b;
+}
+
+function aiSendClick() {
+  const ta = $("#aiIn"); const t = ta.value.trim();
+  if (!t) { toast("Escribe o di algo primero 🙂"); return; }
+  ta.value = "";
+  aiRequestReply(t, false);
+}
+
+async function aiRequestReply(userText, hidden) {
+  if (!aiChat || aiChat.busy) return;
+  if (!hidden) addAiBubble("me", "Tú", userText);
+  aiChat.messages.push({ role: "user", text: userText, hidden: !!hidden });
+  aiChat.busy = true; renderAiControls();
+  aiPendingEl = addAiBubble("bot", "IA", "…", true);
+  try {
+    const reply = await callGemini(state.geminiKey, aiModel(), aiChat.systemPrompt, aiChat.messages);
+    aiChat.messages.push({ role: "model", text: reply });
+    aiChat.turns++;
+    if (aiPendingEl) { aiPendingEl.remove(); aiPendingEl = null; }
+    addAiBubble("bot", "IA", reply);
+    if (aiAutoSpeak) speak(reply);
+  } catch (e) {
+    if (aiPendingEl) { aiPendingEl.remove(); aiPendingEl = null; }
+    addAiBubble("bot", "Error", aiErrorMessage(e), false, true);
+  } finally {
+    aiChat.busy = false; renderAiControls();
+  }
+}
+
+async function aiEnd() {
+  if (!aiChat) return;
+  const realTurns = aiChat.messages.filter(m => m.role === "user" && !m.hidden).length;
+  if (!realTurns) { toast("Escribe o di algo antes de terminar 🙂"); return; }
+  if (aiChat.busy) return;
+  aiChat.busy = true; renderAiControls();
+  aiPendingEl = addAiBubble("bot", "IA", "Generando tu evaluación final…", true);
+  try {
+    const evalPrompt = "The roleplay is over. Based on everything the student said in this conversation, write a short assessment IN SPANISH for a Spanish-speaking English learner: 1) 2-3 fortalezas (strengths), 2) 2-3 áreas a mejorar con un ejemplo concreto de cómo decirlo mejor en inglés, 3) un nivel CEFR estimado (A2/B1/B1+/B2). Sé breve, concreto y motivador. No repitas toda la conversación.";
+    const feedback = await callGemini(state.geminiKey, aiModel(), aiChat.systemPrompt, [...aiChat.messages, { role: "user", text: evalPrompt }]);
+    if (aiPendingEl) { aiPendingEl.remove(); aiPendingEl = null; }
+    addAiBubble("bot", "IA · Evaluación", feedback);
+    state.aiSpeakingSessions = (state.aiSpeakingSessions || 0) + 1;
+    touchStreak(); checkAchievements(); save();
+    toast("Sesión guardada ✔");
+  } catch (e) {
+    if (aiPendingEl) { aiPendingEl.remove(); aiPendingEl = null; }
+    addAiBubble("bot", "Error", aiErrorMessage(e), false, true);
+  } finally {
+    aiChat.busy = false; renderAiControls();
+  }
+}
+
 /* ---------- CORRECTOR INTELIGENTE ---------- */
 let pendingCorrectorText = "";
 RENDER.corrector = (view) => {
@@ -973,6 +1230,7 @@ RENDER.stats = (view) => {
       ${stat("Lecciones", lessonsDone + "/" + lessonsTotal)}
       ${stat("Flashcards", state.flashReviewed)}
       ${stat("Simulacros", state.simSessions)}
+      ${stat("Charlas con IA 🤖", state.aiSpeakingSessions || 0)}
       ${stat("Pronunciación 🎤", sp.count ? sp.avg + "%" : "—")}
     </div>
     ${renderSpeechSection(sp)}
