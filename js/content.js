@@ -14,6 +14,7 @@ const COURSE = {
   /* Orden del menú lateral. type indica qué motor usa app.js */
   modules: [
     { id: "dashboard",   icon: "🏠", title: "Inicio",              type: "dashboard" },
+    { id: "aispeaking",  icon: "🤖", title: "Speaking con IA",       type: "aispeaking" },
     { id: "objectives",  icon: "🎯", title: "Objetivos y método",   type: "objectives" },
     { id: "grammar",     icon: "📐", title: "Gramática",            type: "lessons",  data: "GRAMMAR" },
     { id: "vocab",       icon: "🗂️", title: "Vocabulario",          type: "vocab" },
@@ -26,7 +27,6 @@ const COURSE = {
     { id: "business",    icon: "💼", title: "Business English",     type: "lessons",  data: "BUSINESS" },
     { id: "interview",   icon: "🤝", title: "Entrevistas",          type: "interview" },
     { id: "simulator",   icon: "🎙️", title: "Simulador entrevista", type: "simulator" },
-    { id: "aispeaking",  icon: "🤖", title: "Speaking con IA",       type: "aispeaking" },
     { id: "corrector",   icon: "🩺", title: "Corrección inteligente",type: "corrector" },
     { id: "phrases",     icon: "💬", title: "Frases útiles",         type: "phrases" },
     { id: "travel",      icon: "✈️", title: "Inglés para viajes",     type: "travel" },

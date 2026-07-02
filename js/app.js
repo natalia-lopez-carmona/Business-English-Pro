@@ -281,7 +281,8 @@ RENDER.dashboard = (view) => {
         <span class="pill ok">🔥 Racha: ${state.streak.count} días</span>
       </div>
       <div style="margin-top:16px" class="row">
-        <button class="btn" id="continueBtn">▶ Continuar donde lo dejaste</button>
+        <button class="btn" id="goAiSpeaking">🤖 Speaking con IA (nuevo)</button>
+        <button class="btn secondary" id="continueBtn">▶ Continuar donde lo dejaste</button>
         <button class="btn secondary" id="goPlan">Ver plan de 16 semanas</button>
       </div>
     </div>
@@ -296,6 +297,7 @@ RENDER.dashboard = (view) => {
     <div class="grid grid-3" id="modGrid">
       ${modules.map(m => moduleCard(m)).join("")}
     </div>`;
+  $("#goAiSpeaking").onclick = () => go("aispeaking");
   $("#continueBtn").onclick = () => go(suggestNext());
   $("#goPlan").onclick = () => go("plan");
   $$("#modGrid .module-card").forEach(el => el.onclick = () => go(el.dataset.id));
@@ -304,7 +306,8 @@ function stat(lbl, num) { return `<div class="stat"><div class="num">${num}</div
 function moduleCard(m) {
   let p = "";
   if (m.type === "lessons") { const arr = DATA[m.data]; p = Math.round(arr.filter(x => state.done[x.id]).length / arr.length * 100); }
-  return `<div class="card module-card" data-id="${m.id}">
+  return `<div class="card module-card" data-id="${m.id}" style="position:relative">
+    ${m.id === "aispeaking" ? `<span class="pill ok" style="position:absolute;top:10px;right:10px">NUEVO</span>` : ""}
     <div style="font-size:26px">${m.icon}</div>
     <h3 style="margin:8px 0 4px">${m.title}</h3>
     ${p !== "" ? `<div class="mini-bar"><div class="mini-fill" style="width:${p}%"></div></div>` : `<div class="small muted">Abrir módulo →</div>`}
